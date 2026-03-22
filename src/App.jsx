@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./supabaseClient";
 import Login from "./Login";
+import HistoryModal from "./HistoryModal";
 
 const STATUS_CONFIG = {
   ok:      { label: "OK",        color: "#22c55e", bg: "rgba(34,197,94,0.12)" },
@@ -24,7 +25,7 @@ function StatCard({ label, value, accent }) {
   );
 }
 
-function BoatSwitcher({ boats, activeBoat, onSwitch, onAddBoat }) {
+function BoatSwitcher({ boats, activeBoat, onSwitch, onAddBoat, onEditBoat }) {
   const [open, setOpen] = useState(false);
   return (
     <div style={{ position:"relative" }}>
@@ -43,24 +44,31 @@ function BoatSwitcher({ boats, activeBoat, onSwitch, onAddBoat }) {
         <div style={{
           position:"absolute", top:"calc(100% + 8px)", left:0, zIndex:50,
           background:"#0f172a", border:"1px solid rgba(255,255,255,0.12)",
-          borderRadius:12, minWidth:220, overflow:"hidden",
+          borderRadius:12, minWidth:240, overflow:"hidden",
           boxShadow:"0 16px 40px rgba(0,0,0,0.4)",
         }}>
           <div style={{ padding:"8px 0" }}>
             {boats.map(b => (
-              <button key={b.id} onClick={() => { onSwitch(b); setOpen(false); }} style={{
-                display:"flex", alignItems:"center", gap:10, width:"100%",
-                background: b.id === activeBoat?.id ? "rgba(14,165,233,0.1)" : "transparent",
-                border:"none", padding:"10px 16px", cursor:"pointer",
-                fontFamily:"'DM Sans',sans-serif", textAlign:"left",
-              }}>
-                <span style={{ fontSize:20 }}>⛵</span>
-                <div>
-                  <div style={{ fontSize:14, fontWeight:600, color: b.id === activeBoat?.id ? "#0ea5e9" : "#e2e8f0" }}>{b.name}</div>
-                  <div style={{ fontSize:11, color:"#475569" }}>{b.model} {b.sail_number && `· ${b.sail_number}`}</div>
-                </div>
-                {b.id === activeBoat?.id && <span style={{ marginLeft:"auto", color:"#0ea5e9", fontSize:12 }}>✓</span>}
-              </button>
+              <div key={b.id} style={{ display:"flex", alignItems:"center" }}>
+                <button onClick={() => { onSwitch(b); setOpen(false); }} style={{
+                  display:"flex", alignItems:"center", gap:10, flex:1,
+                  background: b.id === activeBoat?.id ? "rgba(14,165,233,0.1)" : "transparent",
+                  border:"none", padding:"10px 16px", cursor:"pointer",
+                  fontFamily:"'DM Sans',sans-serif", textAlign:"left",
+                }}>
+                  <span style={{ fontSize:20 }}>⛵</span>
+                  <div>
+                    <div style={{ fontSize:14, fontWeight:600, color: b.id === activeBoat?.id ? "#0ea5e9" : "#e2e8f0" }}>{b.name}</div>
+                    <div style={{ fontSize:11, color:"#475569" }}>{b.model}{b.sail_number && ` · ${b.sail_number}`}</div>
+                  </div>
+                  {b.id === activeBoat?.id && <span style={{ marginLeft:"auto", color:"#0ea5e9", fontSize:12 }}>✓</span>}
+                </button>
+                <button onClick={() => { onEditBoat(b); setOpen(false); }} title="Modifier" style={{
+                  background:"transparent", border:"none", padding:"10px 12px 10px 4px",
+                  color:"#475569", fontSize:13, cursor:"pointer",
+                  fontFamily:"'DM Sans',sans-serif",
+                }}>✎</button>
+              </div>
             ))}
           </div>
           <div style={{ borderTop:"1px solid rgba(255,255,255,0.06)", padding:"8px 0" }}>
@@ -93,6 +101,8 @@ export default function App() {
   const [editItem, setEditItem] = useState(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showAddBoat, setShowAddBoat] = useState(false);
+  const [editBoat, setEditBoat] = useState(null);
+  const [historyTask, setHistoryTask] = useState(null);
   const [newTask, setNewTask] = useState({ name:"", interval:"", last_done:"", notes:"", status:"ok" });
   const [newBoat, setNewBoat] = useState({ name:"", model:"", sail_number:"" });
   const [filter, setFilter] = useState("all");
@@ -154,6 +164,22 @@ export default function App() {
     setSaving(false);
   }
 
+  async function saveEditBoat() {
+    if (!editBoat.name.trim()) return;
+    setSaving(true);
+    const { error } = await supabase.from("boats").update({
+      name: editBoat.name, model: editBoat.model, sail_number: editBoat.sail_number,
+    }).eq("id", editBoat.id);
+    if (error) showToast("Erreur lors de la mise à jour", "error");
+    else {
+      setBoats(prev => prev.map(b => b.id === editBoat.id ? { ...b, ...editBoat } : b));
+      if (activeBoat?.id === editBoat.id) setActiveBoat(prev => ({ ...prev, ...editBoat }));
+      showToast("Bateau mis à jour ✓");
+      setEditBoat(null);
+    }
+    setSaving(false);
+  }
+
   const allTasks = tasks;
   const totalOk = allTasks.filter(t => t.status==="ok").length;
   const totalDue = allTasks.filter(t => t.status==="due").length;
@@ -166,10 +192,18 @@ export default function App() {
   async function markDone(id) {
     setSaving(true);
     const today = new Date().toISOString().split("T")[0];
-    const { error } = await supabase.from("tasks").update({ last_done:today, status:"ok" }).eq("id",id);
-    if (error) showToast("Erreur","error");
+    const task = tasks.find(t => t.id === id);
+    const [{ error: taskErr }] = await Promise.all([
+      supabase.from("tasks").update({ last_done:today, status:"ok" }).eq("id",id),
+      supabase.from("maintenance_history").insert({ task_id:id, boat_id:activeBoat.id, done_at:today, notes:"Marqué fait" }),
+    ]);
+    if (taskErr) showToast("Erreur","error");
     else { setTasks(prev => prev.map(t => t.id===id ? {...t, last_done:today, status:"ok"} : t)); showToast("Tâche marquée comme faite ✓"); }
     setSaving(false);
+  }
+
+  function handleHistoryEntryAdded(taskId, doneAt) {
+    setTasks(prev => prev.map(t => t.id===taskId ? {...t, last_done:doneAt, status:"ok"} : t));
   }
 
   async function saveEdit() {
@@ -228,7 +262,7 @@ export default function App() {
           </div>
 
           <div style={{ display:"flex", alignItems:"center", gap:12, flexWrap:"wrap" }}>
-            <BoatSwitcher boats={boats} activeBoat={activeBoat} onSwitch={setActiveBoat} onAddBoat={() => setShowAddBoat(true)} />
+            <BoatSwitcher boats={boats} activeBoat={activeBoat} onSwitch={setActiveBoat} onAddBoat={() => setShowAddBoat(true)} onEditBoat={setEditBoat} />
 
             {/* Health gauge */}
             <div style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:12, padding:"10px 18px", display:"flex", alignItems:"center", gap:12 }}>
@@ -319,6 +353,7 @@ export default function App() {
                           <td style={{ padding:"13px 20px" }}>
                             <div style={{ display:"flex", gap:6 }}>
                               <button onClick={() => markDone(task.id)} disabled={saving} style={{ background:"rgba(34,197,94,0.12)", border:"1px solid rgba(34,197,94,0.2)", borderRadius:6, padding:"4px 10px", color:"#22c55e", fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"'DM Sans',sans-serif", whiteSpace:"nowrap" }}>✓ Fait</button>
+                              <button onClick={() => setHistoryTask(task)} style={{ background:"rgba(14,165,233,0.08)", border:"1px solid rgba(14,165,233,0.15)", borderRadius:6, padding:"4px 10px", color:"#0ea5e9", fontSize:12, cursor:"pointer", fontFamily:"'DM Sans',sans-serif", whiteSpace:"nowrap" }}>📋 Historique</button>
                               <button onClick={() => setEditItem({...task})} style={{ background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:6, padding:"4px 10px", color:"#94a3b8", fontSize:12, cursor:"pointer", fontFamily:"'DM Sans',sans-serif" }}>Modifier</button>
                               <button onClick={() => deleteTask(task.id)} style={{ background:"rgba(239,68,68,0.08)", border:"1px solid rgba(239,68,68,0.15)", borderRadius:6, padding:"4px 10px", color:"#ef4444", fontSize:12, cursor:"pointer", fontFamily:"'DM Sans',sans-serif" }}>✕</button>
                             </div>
@@ -338,6 +373,16 @@ export default function App() {
           {activeBoat?.name} · {activeBoat?.model} · Carnet de maintenance · {new Date().getFullYear()}
         </div>
       </div>
+
+      {/* History Modal */}
+      {historyTask && (
+        <HistoryModal
+          task={historyTask}
+          boat={activeBoat}
+          onClose={() => setHistoryTask(null)}
+          onEntryAdded={handleHistoryEntryAdded}
+        />
+      )}
 
       {/* Modal Modifier */}
       {editItem && (
@@ -403,6 +448,30 @@ export default function App() {
             <div style={{ display:"flex", gap:10, justifyContent:"flex-end", marginTop:8 }}>
               <button onClick={() => setShowAddBoat(false)} style={{ background:"transparent", border:"1px solid rgba(255,255,255,0.1)", borderRadius:8, padding:"10px 20px", color:"#94a3b8", fontFamily:"'DM Sans',sans-serif", cursor:"pointer", fontSize:14 }}>Annuler</button>
               <button onClick={handleAddBoat} disabled={saving} style={{ background:"#0ea5e9", border:"none", borderRadius:8, padding:"10px 24px", color:"#fff", fontFamily:"'DM Sans',sans-serif", fontWeight:700, cursor:"pointer", fontSize:14 }}>{saving?"Ajout…":"Ajouter"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Modifier bateau */}
+      {editBoat && (
+        <div style={modalOverlay} onClick={() => setEditBoat(null)}>
+          <div style={modalBox} onClick={e => e.stopPropagation()}>
+            <h2 style={{ fontFamily:"'Playfair Display',serif", margin:"0 0 8px", fontSize:22, color:"#e2e8f0" }}>Modifier le bateau</h2>
+            <div style={{ fontSize:13, color:"#475569", marginBottom:24 }}>Modifiez les informations de <strong style={{ color:"#0ea5e9" }}>{editBoat.name}</strong></div>
+            {[
+              {label:"Nom du bateau", key:"name", type:"text", placeholder:"ex. Tamarin"},
+              {label:"Modèle", key:"model", type:"text", placeholder:"ex. Trisbald 36"},
+              {label:"Numéro de voile / immatriculation", key:"sail_number", type:"text", placeholder:"ex. FRA 7284"},
+            ].map(f => (
+              <div key={f.key} style={{ marginBottom:16 }}>
+                <label style={labelStyle}>{f.label}</label>
+                <input type={f.type} placeholder={f.placeholder} value={editBoat[f.key]||""} onChange={e => setEditBoat(p => ({...p,[f.key]:e.target.value}))} style={inputStyle}/>
+              </div>
+            ))}
+            <div style={{ display:"flex", gap:10, justifyContent:"flex-end", marginTop:8 }}>
+              <button onClick={() => setEditBoat(null)} style={{ background:"transparent", border:"1px solid rgba(255,255,255,0.1)", borderRadius:8, padding:"10px 20px", color:"#94a3b8", fontFamily:"'DM Sans',sans-serif", cursor:"pointer", fontSize:14 }}>Annuler</button>
+              <button onClick={saveEditBoat} disabled={saving} style={{ background:"#0ea5e9", border:"none", borderRadius:8, padding:"10px 24px", color:"#fff", fontFamily:"'DM Sans',sans-serif", fontWeight:700, cursor:"pointer", fontSize:14 }}>{saving?"Enregistrement…":"Enregistrer"}</button>
             </div>
           </div>
         </div>
