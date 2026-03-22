@@ -9,6 +9,51 @@ const STATUS_CONFIG = {
   overdue: { label: "En retard", color: "#ef4444", bg: "rgba(239,68,68,0.12)" },
 };
 const FILTER_LABELS = { all: "Tout", ok: "OK", due: "À prévoir", overdue: "En retard" };
+
+// Parse interval string into number of days
+// Handles: "Annuel", "2 ans", "6 mois", "3 ans", "Annuel / 100h", "5 ans", etc.
+function parseIntervalToDays(interval) {
+  if (!interval) return null;
+  const s = interval.toLowerCase().trim();
+  // Take only the time part (ignore "/100h" engine-hour parts)
+  const timePart = s.split("/")[0].trim();
+
+  if (timePart.includes("annuel") || timePart === "1 an") return 365;
+
+  const anMatch = timePart.match(/(\d+)\s*an/);
+  if (anMatch) return parseInt(anMatch[1]) * 365;
+
+  const moisMatch = timePart.match(/(\d+)\s*mois/);
+  if (moisMatch) return parseInt(moisMatch[1]) * 30;
+
+  const semMatch = timePart.match(/(\d+)\s*sem/);
+  if (semMatch) return parseInt(semMatch[1]) * 7;
+
+  return null; // unknown format — no auto-status
+}
+
+// Compute status from last_done + interval, with 80% threshold for "due"
+function computeStatus(last_done, interval) {
+  const intervalDays = parseIntervalToDays(interval);
+  if (!intervalDays || !last_done) return null; // null = keep manual status
+
+  const lastDate = new Date(last_done);
+  const today = new Date();
+  const daysSince = Math.floor((today - lastDate) / (1000 * 60 * 60 * 24));
+
+  if (daysSince >= intervalDays) return "overdue";
+  if (daysSince >= intervalDays * 0.8) return "due";
+  return "ok";
+}
+
+// Enrich tasks with computed status (overrides stored status when computable)
+function enrichTasks(tasks) {
+  return tasks.map(t => {
+    const computed = computeStatus(t.last_done, t.interval);
+    return computed ? { ...t, status: computed } : t;
+  });
+}
+
 const inputStyle = { width:"100%", background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:8, padding:"10px 14px", color:"#e2e8f0", fontSize:14, fontFamily:"'DM Sans',sans-serif", boxSizing:"border-box", outline:"none" };
 const labelStyle = { display:"block", fontSize:12, color:"#64748b", fontWeight:600, marginBottom:6, textTransform:"uppercase", letterSpacing:"0.06em" };
 
@@ -137,7 +182,7 @@ export default function App() {
       ]);
       if (sErr) throw sErr;
       if (tErr) throw tErr;
-      setSections(sData); setTasks(tData);
+      setSections(sData); setTasks(enrichTasks(tData));
       setActiveSection(sData.length > 0 ? sData[0].id : null);
       setFilter("all");
     } catch(e) { setError(e.message); }
@@ -193,23 +238,26 @@ export default function App() {
     setSaving(true);
     const today = new Date().toISOString().split("T")[0];
     const [{ error: taskErr }] = await Promise.all([
-      supabase.from("tasks").update({ last_done:today, status:"ok" }).eq("id",id),
+      supabase.from("tasks").update({ last_done:today }).eq("id",id),
       supabase.from("maintenance_history").insert({ task_id:id, boat_id:activeBoat.id, done_at:today, notes:"Marqué fait" }),
     ]);
     if (taskErr) showToast("Erreur","error");
-    else { setTasks(prev => prev.map(t => t.id===id ? {...t, last_done:today, status:"ok"} : t)); showToast("Tâche marquée comme faite ✓"); }
+    else {
+      setTasks(prev => enrichTasks(prev.map(t => t.id===id ? {...t, last_done:today} : t)));
+      showToast("Tâche marquée comme faite ✓");
+    }
     setSaving(false);
   }
 
   function handleHistoryEntryAdded(taskId, doneAt) {
-    setTasks(prev => prev.map(t => t.id===taskId ? {...t, last_done:doneAt, status:"ok"} : t));
+    setTasks(prev => enrichTasks(prev.map(t => t.id===taskId ? {...t, last_done:doneAt} : t)));
   }
 
   async function saveEdit() {
     setSaving(true);
     const { error } = await supabase.from("tasks").update({ name:editItem.name, interval:editItem.interval, last_done:editItem.last_done||null, notes:editItem.notes, status:editItem.status }).eq("id",editItem.id);
     if (error) showToast("Erreur","error");
-    else { setTasks(prev => prev.map(t => t.id===editItem.id ? {...t,...editItem} : t)); showToast("Modifications enregistrées"); setEditItem(null); }
+    else { setTasks(prev => enrichTasks(prev.map(t => t.id===editItem.id ? {...t,...editItem} : t))); showToast("Modifications enregistrées"); setEditItem(null); }
     setSaving(false);
   }
 
@@ -218,7 +266,7 @@ export default function App() {
     setSaving(true);
     const { data, error } = await supabase.from("tasks").insert({ section_id:activeSection, boat_id:activeBoat.id, name:newTask.name, interval:newTask.interval, last_done:newTask.last_done||null, notes:newTask.notes, status:newTask.status }).select().single();
     if (error) showToast("Erreur","error");
-    else { setTasks(prev => [...prev, data]); showToast("Tâche ajoutée ✓"); setNewTask({ name:"", interval:"", last_done:"", notes:"", status:"ok" }); setShowAddModal(false); }
+    else { setTasks(prev => enrichTasks([...prev, data])); showToast("Tâche ajoutée ✓"); setNewTask({ name:"", interval:"", last_done:"", notes:"", status:"ok" }); setShowAddModal(false); }
     setSaving(false);
   }
 
@@ -334,7 +382,7 @@ export default function App() {
                   <table style={{ width:"100%", borderCollapse:"collapse" }}>
                     <thead>
                       <tr style={{ background:"rgba(255,255,255,0.02)" }}>
-                        {["Tâche","Périodicité","Dernière intervention","État","Observations","Actions"].map(h => (
+                        {["Tâche","Périodicité","Dernière intervention","Prochaine échéance","État","Observations","Actions"].map(h => (
                           <th key={h} style={{ padding:"10px 20px", textAlign:"left", fontSize:11, fontWeight:700, color:"#475569", letterSpacing:"0.08em", textTransform:"uppercase", borderBottom:"1px solid rgba(255,255,255,0.05)", whiteSpace:"nowrap" }}>{h}</th>
                         ))}
                       </tr>
@@ -347,6 +395,17 @@ export default function App() {
                           <td style={{ padding:"13px 20px", fontSize:14, fontWeight:600, color:"#cbd5e1", whiteSpace:"nowrap" }}>{task.name}</td>
                           <td style={{ padding:"13px 20px", fontSize:13, color:"#64748b", whiteSpace:"nowrap" }}>{task.interval||"—"}</td>
                           <td style={{ padding:"13px 20px", fontSize:13, color:"#64748b", whiteSpace:"nowrap" }}>{task.last_done||"—"}</td>
+                          <td style={{ padding:"13px 20px", fontSize:13, whiteSpace:"nowrap" }}>
+                            {(() => {
+                              const days = parseIntervalToDays(task.interval);
+                              if (!days || !task.last_done) return <span style={{ color:"#334155" }}>—</span>;
+                              const due = new Date(task.last_done);
+                              due.setDate(due.getDate() + days);
+                              const dueStr = due.toISOString().split("T")[0];
+                              const isPast = due < new Date();
+                              return <span style={{ color: isPast ? "#ef4444" : "#64748b" }}>{dueStr}</span>;
+                            })()}
+                          </td>
                           <td style={{ padding:"13px 20px" }}><StatusBadge status={task.status}/></td>
                           <td style={{ padding:"13px 20px", fontSize:12, color:"#475569", minWidth:140 }}>{task.notes||<span style={{ color:"#2d3748" }}>—</span>}</td>
                           <td style={{ padding:"13px 20px" }}>
