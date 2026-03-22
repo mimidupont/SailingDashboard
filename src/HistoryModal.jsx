@@ -25,6 +25,7 @@ export default function HistoryModal({ task, boat, onClose, onEntryAdded }) {
 
   useEffect(() => {
     fetchHistory();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [task.id]);
 
   async function fetchHistory() {

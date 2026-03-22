@@ -192,7 +192,6 @@ export default function App() {
   async function markDone(id) {
     setSaving(true);
     const today = new Date().toISOString().split("T")[0];
-    const task = tasks.find(t => t.id === id);
     const [{ error: taskErr }] = await Promise.all([
       supabase.from("tasks").update({ last_done:today, status:"ok" }).eq("id",id),
       supabase.from("maintenance_history").insert({ task_id:id, boat_id:activeBoat.id, done_at:today, notes:"Marqué fait" }),
