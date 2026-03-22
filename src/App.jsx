@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./supabaseClient";
 import Login from "./Login";
 import HistoryModal from "./HistoryModal";
+import IntervalPicker from "./IntervalPicker";
 
 const STATUS_CONFIG = {
   ok:      { label: "OK",        color: "#22c55e", bg: "rgba(34,197,94,0.12)" },
@@ -10,26 +11,18 @@ const STATUS_CONFIG = {
 };
 const FILTER_LABELS = { all: "Tout", ok: "OK", due: "À prévoir", overdue: "En retard" };
 
-// Parse interval string into number of days
-// Handles: "Annuel", "2 ans", "6 mois", "3 ans", "Annuel / 100h", "5 ans", etc.
+
+// Hours-based intervals skip auto-status (no reliable day conversion)
 function parseIntervalToDays(interval) {
   if (!interval) return null;
   const s = interval.toLowerCase().trim();
-  // Take only the time part (ignore "/100h" engine-hour parts)
-  const timePart = s.split("/")[0].trim();
-
-  if (timePart.includes("annuel") || timePart === "1 an") return 365;
-
-  const anMatch = timePart.match(/(\d+)\s*an/);
+  if (s.includes("heure")) return null;
+  if (s.includes("annuel") || s === "1 an") return 365;
+  const anMatch = s.match(/(\d+)\s*an/);
   if (anMatch) return parseInt(anMatch[1]) * 365;
-
-  const moisMatch = timePart.match(/(\d+)\s*mois/);
+  const moisMatch = s.match(/(\d+)\s*mois/);
   if (moisMatch) return parseInt(moisMatch[1]) * 30;
-
-  const semMatch = timePart.match(/(\d+)\s*sem/);
-  if (semMatch) return parseInt(semMatch[1]) * 7;
-
-  return null; // unknown format — no auto-status
+  return null;
 }
 
 // Compute status from last_done + interval, with 80% threshold for "due"
@@ -447,17 +440,15 @@ export default function App() {
         <div style={modalOverlay} onClick={() => setEditItem(null)}>
           <div style={modalBox} onClick={e => e.stopPropagation()}>
             <h2 style={{ fontFamily:"'Playfair Display',serif", margin:"0 0 24px", fontSize:22, color:"#e2e8f0" }}>Modifier la tâche</h2>
-            {[{label:"Nom",key:"name",type:"text"},{label:"Périodicité",key:"interval",type:"text"},{label:"Dernière intervention",key:"last_done",type:"date"},{label:"Observations",key:"notes",type:"text"}].map(f => (
+            {[{label:"Nom",key:"name",type:"text"},{label:"Dernière intervention",key:"last_done",type:"date"},{label:"Observations",key:"notes",type:"text"}].map(f => (
               <div key={f.key} style={{ marginBottom:16 }}>
                 <label style={labelStyle}>{f.label}</label>
                 <input type={f.type} value={editItem[f.key]||""} onChange={e => setEditItem(p => ({...p,[f.key]:e.target.value}))} style={inputStyle}/>
               </div>
             ))}
-            <div style={{ marginBottom:24 }}>
-              <label style={labelStyle}>État</label>
-              <select value={editItem.status} onChange={e => setEditItem(p => ({...p,status:e.target.value}))} style={{...inputStyle,background:"#1e293b"}}>
-                <option value="ok">OK</option><option value="due">À prévoir</option><option value="overdue">En retard</option>
-              </select>
+            <div style={{ marginBottom:16 }}>
+              <label style={labelStyle}>Périodicité</label>
+              <IntervalPicker value={editItem.interval||""} onChange={v => setEditItem(p => ({...p, interval:v}))}/>
             </div>
             <div style={{ display:"flex", gap:10, justifyContent:"flex-end" }}>
               <button onClick={() => setEditItem(null)} style={{ background:"transparent", border:"1px solid rgba(255,255,255,0.1)", borderRadius:8, padding:"10px 20px", color:"#94a3b8", fontFamily:"'DM Sans',sans-serif", cursor:"pointer", fontSize:14 }}>Annuler</button>
@@ -473,12 +464,16 @@ export default function App() {
           <div style={modalBox} onClick={e => e.stopPropagation()}>
             <h2 style={{ fontFamily:"'Playfair Display',serif", margin:"0 0 8px", fontSize:22, color:"#e2e8f0" }}>Nouvelle tâche</h2>
             <div style={{ fontSize:13, color:"#475569", marginBottom:24 }}>Ajout dans : <strong style={{ color:currentSection?.color }}>{currentSection?.label}</strong></div>
-            {[{label:"Nom de la tâche",key:"name",type:"text",placeholder:""},{label:"Périodicité",key:"interval",type:"text",placeholder:"ex. Annuel, 2 ans"},{label:"Dernière intervention",key:"last_done",type:"date",placeholder:""},{label:"Observations",key:"notes",type:"text",placeholder:""}].map(f => (
+            {[{label:"Nom de la tâche",key:"name",type:"text",placeholder:""},{label:"Dernière intervention",key:"last_done",type:"date",placeholder:""},{label:"Observations",key:"notes",type:"text",placeholder:""}].map(f => (
               <div key={f.key} style={{ marginBottom:16 }}>
                 <label style={labelStyle}>{f.label}</label>
                 <input type={f.type} placeholder={f.placeholder} value={newTask[f.key]||""} onChange={e => setNewTask(p => ({...p,[f.key]:e.target.value}))} style={inputStyle}/>
               </div>
             ))}
+            <div style={{ marginBottom:16 }}>
+              <label style={labelStyle}>Périodicité</label>
+              <IntervalPicker value={newTask.interval||"Annuel"} onChange={v => setNewTask(p => ({...p, interval:v}))}/>
+            </div>
             <div style={{ display:"flex", gap:10, justifyContent:"flex-end", marginTop:8 }}>
               <button onClick={() => setShowAddModal(false)} style={{ background:"transparent", border:"1px solid rgba(255,255,255,0.1)", borderRadius:8, padding:"10px 20px", color:"#94a3b8", fontFamily:"'DM Sans',sans-serif", cursor:"pointer", fontSize:14 }}>Annuler</button>
               <button onClick={addTask} disabled={saving} style={{ background:currentSection?.color, border:"none", borderRadius:8, padding:"10px 24px", color:"#fff", fontFamily:"'DM Sans',sans-serif", fontWeight:700, cursor:"pointer", fontSize:14 }}>{saving?"Ajout…":"Ajouter"}</button>
