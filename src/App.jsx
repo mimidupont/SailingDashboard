@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./supabaseClient";
+import Login from "./Login";
+
 
 const STATUS_CONFIG = {
   ok:      { label: "OK",        color: "#22c55e", bg: "rgba(34,197,94,0.12)" },
@@ -24,9 +26,22 @@ function StatCard({ label, value, accent }) {
 }
 
 export default function App() {
+  const [session, setSession] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
   const [sections, setSections] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setAuthChecked(true);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [activeSection, setActiveSection] = useState(null);
@@ -97,6 +112,14 @@ export default function App() {
     else { setTasks(prev => prev.filter(t => t.id!==id)); showToast("Tâche supprimée"); }
   }
 
+  if (!authChecked) return null;
+  if (!session) return <Login onLogin={setSession} />;
+
+  async function handleLogout() {
+    await supabase.auth.signOut();
+    setSession(null);
+  }
+
   if (loading) return (
     <div style={{ minHeight:"100vh", background:"linear-gradient(135deg,#0a0f1e,#0d1b2a)", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"'DM Sans',sans-serif" }}>
       <div style={{ textAlign:"center" }}>
@@ -140,6 +163,7 @@ export default function App() {
             <h1 style={{ fontFamily:"'Playfair Display',serif", fontSize:"clamp(32px,5vw,52px)", fontWeight:800, margin:0, background:"linear-gradient(90deg,#e2e8f0 0%,#7dd3fc 100%)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent", lineHeight:1.1 }}>Tamarin</h1>
             <div style={{ fontSize:14, color:"#64748b", marginTop:4, fontWeight:500 }}>Trisbald 36 · Voile n° FRA 7284</div>
           </div>
+          <button onClick={handleLogout} style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:8, padding:"8px 16px", color:"#64748b", fontSize:13, fontFamily:"'DM Sans',sans-serif", cursor:"pointer", fontWeight:500, alignSelf:"flex-start" }}>↩ Déconnexion</button>
           <div style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:16, padding:"16px 24px", textAlign:"center" }}>
             <div style={{ fontSize:11, color:"#64748b", fontWeight:600, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:8 }}>État du Navire</div>
             <div style={{ position:"relative", display:"inline-flex", alignItems:"center", justifyContent:"center" }}>
