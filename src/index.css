@@ -3,3 +3,4 @@ body { background: #0a0f1e; }
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+.tabs-row::-webkit-scrollbar { display: none; }

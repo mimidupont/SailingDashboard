@@ -208,7 +208,7 @@ export default function App() {
     <div style={{ minHeight:"100vh", background:"linear-gradient(135deg,#0a0f1e 0%,#0d1b2a 50%,#0a1628 100%)", fontFamily:"'DM Sans',sans-serif", color:"#e2e8f0" }}>
       <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;800&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet"/>
       <div style={{ position:"fixed", inset:0, pointerEvents:"none", backgroundImage:"radial-gradient(ellipse 80% 50% at 50% -20%,rgba(14,165,233,0.08) 0%,transparent 60%)" }}/>
-      <style>{`@keyframes fadeIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}`}</style>
+      <style>{`@keyframes fadeIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}} .tabs-row::-webkit-scrollbar{display:none}`}</style>
       {toast && <div style={{ position:"fixed", top:24, right:24, zIndex:200, background:toast.type==="error"?"#ef4444":"#22c55e", color:"#fff", borderRadius:10, padding:"12px 20px", fontSize:14, fontWeight:600, boxShadow:"0 8px 24px rgba(0,0,0,0.3)", animation:"fadeIn 0.2s ease" }}>{toast.msg}</div>}
 
       <div style={{ position:"relative", zIndex:1, maxWidth:1200, margin:"0 auto", padding:"32px 24px" }}>
@@ -266,7 +266,7 @@ export default function App() {
             </div>
 
             {/* Onglets */}
-            <div style={{ display:"flex", gap:8, marginBottom:24, overflowX:"auto", paddingBottom:4 }}>
+            <div className="tabs-row" style={{ display:"flex", gap:8, marginBottom:24, overflowX:"auto", paddingBottom:4, scrollbarWidth:"none", msOverflowStyle:"none" }}>
               {sections.map(s => {
                 const st = tasks.filter(t => t.section_id===s.id);
                 const alerts = st.filter(t => t.status!=="ok").length;
