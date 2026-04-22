@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { memo, useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { supabase } from "./supabaseClient";
 import Login from "./Login";
 import HistoryModal from "./HistoryModal";
@@ -10,7 +10,7 @@ const STATUS_CONFIG = {
   overdue: { label: "En retard", color: "#ef4444", bg: "rgba(239,68,68,0.12)" },
 };
 const FILTER_LABELS = { all: "Tout", ok: "OK", due: "À prévoir", overdue: "En retard" };
-
+const FILTER_ORDER = ["all", "ok", "due", "overdue"];
 
 // Hours-based intervals skip auto-status (no reliable day conversion)
 function parseIntervalToDays(interval) {
@@ -47,6 +47,19 @@ function enrichTasks(tasks) {
   });
 }
 
+function getDueDateInfo(task) {
+  const days = parseIntervalToDays(task.interval);
+  if (!days || !task.last_done) return null;
+
+  const due = new Date(task.last_done);
+  due.setDate(due.getDate() + days);
+
+  return {
+    dueStr: due.toISOString().split("T")[0],
+    isPast: due < new Date(),
+  };
+}
+
 const inputStyle = { width:"100%", background:"rgba(255,255,255,0.05)", border:"1px solid rgba(255,255,255,0.1)", borderRadius:8, padding:"10px 14px", color:"#e2e8f0", fontSize:14, fontFamily:"'DM Sans',sans-serif", boxSizing:"border-box", outline:"none" };
 const labelStyle = { display:"block", fontSize:12, color:"#64748b", fontWeight:600, marginBottom:6, textTransform:"uppercase", letterSpacing:"0.06em" };
 
@@ -63,7 +76,7 @@ function StatCard({ label, value, accent }) {
   );
 }
 
-function BoatSwitcher({ boats, activeBoat, onSwitch, onAddBoat, onEditBoat }) {
+const BoatSwitcher = memo(function BoatSwitcher({ boats, activeBoat, onSwitch, onAddBoat, onEditBoat }) {
   const [open, setOpen] = useState(false);
   return (
     <div style={{ position:"relative" }}>
@@ -123,7 +136,7 @@ function BoatSwitcher({ boats, activeBoat, onSwitch, onAddBoat, onEditBoat }) {
       )}
     </div>
   );
-}
+});
 
 export default function App() {
   const [session, setSession] = useState(null);
@@ -146,7 +159,17 @@ export default function App() {
   const [filter, setFilter] = useState("all");
   const [toast, setToast] = useState(null);
 
-  const showToast = (msg, type="ok") => { setToast({ msg, type }); setTimeout(() => setToast(null), 3000); };
+  const toastTimeoutRef = useRef(null);
+
+  const showToast = useCallback((msg, type="ok") => {
+    setToast({ msg, type });
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    toastTimeoutRef.current = setTimeout(() => setToast(null), 3000);
+  }, []);
+
+  useEffect(() => () => {
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+  }, []);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => { setSession(session); setAuthChecked(true); });
@@ -218,14 +241,47 @@ export default function App() {
     setSaving(false);
   }
 
-  const allTasks = tasks;
-  const totalOk = allTasks.filter(t => t.status==="ok").length;
-  const totalDue = allTasks.filter(t => t.status==="due").length;
-  const totalOverdue = allTasks.filter(t => t.status==="overdue").length;
-  const healthPct = allTasks.length > 0 ? Math.round((totalOk/allTasks.length)*100) : 0;
-  const currentSection = sections.find(s => s.id===activeSection);
-  const sectionTasks = tasks.filter(t => t.section_id===activeSection);
-  const displayItems = filter==="all" ? sectionTasks : sectionTasks.filter(t => t.status===filter);
+  const taskStats = useMemo(() => tasks.reduce((acc, task) => {
+    if (task.status === "ok") acc.totalOk += 1;
+    if (task.status === "due") acc.totalDue += 1;
+    if (task.status === "overdue") acc.totalOverdue += 1;
+    return acc;
+  }, { totalOk: 0, totalDue: 0, totalOverdue: 0 }), [tasks]);
+
+  const healthPct = tasks.length > 0 ? Math.round((taskStats.totalOk / tasks.length) * 100) : 0;
+
+  const currentSection = useMemo(() => sections.find(s => s.id === activeSection), [sections, activeSection]);
+
+  const tasksBySection = useMemo(() => tasks.reduce((acc, task) => {
+    if (!acc[task.section_id]) acc[task.section_id] = [];
+    acc[task.section_id].push(task);
+    return acc;
+  }, {}), [tasks]);
+
+  const sectionTasks = useMemo(() => tasksBySection[activeSection] ?? [], [tasksBySection, activeSection]);
+
+  const displayItems = useMemo(() => (
+    filter === "all" ? sectionTasks : sectionTasks.filter(t => t.status === filter)
+  ), [filter, sectionTasks]);
+
+  const sectionSummaries = useMemo(() => sections.reduce((acc, section) => {
+    const sectionItems = tasksBySection[section.id] ?? [];
+    let alerts = 0;
+    let hasOverdue = false;
+
+    sectionItems.forEach(item => {
+      if (item.status !== "ok") alerts += 1;
+      if (item.status === "overdue") hasOverdue = true;
+    });
+
+    acc[section.id] = { alerts, hasOverdue };
+    return acc;
+  }, {}), [sections, tasksBySection]);
+
+  const displayItemsWithDue = useMemo(() => displayItems.map(task => ({
+    ...task,
+    dueInfo: getDueDateInfo(task),
+  })), [displayItems]);
 
   async function markDone(id) {
     setSaving(true);
@@ -333,18 +389,16 @@ export default function App() {
           <>
             {/* Stats */}
             <div style={{ display:"flex", gap:12, marginBottom:32, flexWrap:"wrap" }}>
-              <StatCard label="Total tâches" value={allTasks.length} accent="#7dd3fc"/>
-              <StatCard label="À jour" value={totalOk} accent="#22c55e"/>
-              <StatCard label="À prévoir" value={totalDue} accent="#f59e0b"/>
-              <StatCard label="En retard" value={totalOverdue} accent="#ef4444"/>
+              <StatCard label="Total tâches" value={tasks.length} accent="#7dd3fc"/>
+              <StatCard label="À jour" value={taskStats.totalOk} accent="#22c55e"/>
+              <StatCard label="À prévoir" value={taskStats.totalDue} accent="#f59e0b"/>
+              <StatCard label="En retard" value={taskStats.totalOverdue} accent="#ef4444"/>
             </div>
 
             {/* Onglets */}
             <div className="tabs-row" style={{ display:"flex", gap:8, marginBottom:24, overflowX:"auto", paddingBottom:4, scrollbarWidth:"none", msOverflowStyle:"none" }}>
               {sections.map(s => {
-                const st = tasks.filter(t => t.section_id===s.id);
-                const alerts = st.filter(t => t.status!=="ok").length;
-                const hasOverdue = st.some(t => t.status==="overdue");
+                const { alerts, hasOverdue } = sectionSummaries[s.id] ?? { alerts: 0, hasOverdue: false };
                 const isActive = s.id===activeSection;
                 return (
                   <button key={s.id} onClick={() => { setActiveSection(s.id); setFilter("all"); }} style={{ background:isActive?s.color+"22":"rgba(255,255,255,0.03)", border:`1px solid ${isActive?s.color:"rgba(255,255,255,0.08)"}`, borderRadius:10, padding:"10px 18px", color:isActive?s.color:"#94a3b8", fontFamily:"'DM Sans',sans-serif", fontWeight:600, fontSize:13, cursor:"pointer", whiteSpace:"nowrap", display:"flex", alignItems:"center", gap:7, transition:"all 0.2s" }}>
@@ -365,7 +419,7 @@ export default function App() {
                     <span style={{ fontSize:12, color:"#64748b" }}>({sectionTasks.length} tâches)</span>
                   </div>
                   <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
-                    {["all","ok","due","overdue"].map(f => (
+                    {FILTER_ORDER.map(f => (
                       <button key={f} onClick={() => setFilter(f)} style={{ background:filter===f?"rgba(255,255,255,0.1)":"transparent", border:`1px solid ${filter===f?"rgba(255,255,255,0.2)":"rgba(255,255,255,0.06)"}`, borderRadius:6, padding:"4px 12px", color:filter===f?"#e2e8f0":"#64748b", fontSize:12, fontWeight:600, cursor:"pointer", fontFamily:"'DM Sans',sans-serif" }}>{FILTER_LABELS[f]}</button>
                     ))}
                     <button onClick={() => setShowAddModal(true)} style={{ background:currentSection.color, border:"none", borderRadius:8, padding:"6px 14px", color:"#fff", fontSize:13, fontWeight:700, cursor:"pointer", fontFamily:"'DM Sans',sans-serif", marginLeft:4 }}>+ Ajouter</button>
@@ -381,7 +435,7 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody>
-                      {displayItems.map((task, idx) => (
+                      {displayItemsWithDue.map((task, idx) => (
                         <tr key={task.id} style={{ borderBottom:"1px solid rgba(255,255,255,0.04)", background:idx%2===0?"transparent":"rgba(255,255,255,0.01)", transition:"background 0.15s" }}
                           onMouseEnter={e => e.currentTarget.style.background="rgba(255,255,255,0.04)"}
                           onMouseLeave={e => e.currentTarget.style.background=idx%2===0?"transparent":"rgba(255,255,255,0.01)"}>
@@ -389,15 +443,11 @@ export default function App() {
                           <td style={{ padding:"13px 20px", fontSize:13, color:"#64748b", whiteSpace:"nowrap" }}>{task.interval||"—"}</td>
                           <td style={{ padding:"13px 20px", fontSize:13, color:"#64748b", whiteSpace:"nowrap" }}>{task.last_done||"—"}</td>
                           <td style={{ padding:"13px 20px", fontSize:13, whiteSpace:"nowrap" }}>
-                            {(() => {
-                              const days = parseIntervalToDays(task.interval);
-                              if (!days || !task.last_done) return <span style={{ color:"#334155" }}>—</span>;
-                              const due = new Date(task.last_done);
-                              due.setDate(due.getDate() + days);
-                              const dueStr = due.toISOString().split("T")[0];
-                              const isPast = due < new Date();
-                              return <span style={{ color: isPast ? "#ef4444" : "#64748b" }}>{dueStr}</span>;
-                            })()}
+                            {task.dueInfo ? (
+                              <span style={{ color: task.dueInfo.isPast ? "#ef4444" : "#64748b" }}>{task.dueInfo.dueStr}</span>
+                            ) : (
+                              <span style={{ color:"#334155" }}>—</span>
+                            )}
                           </td>
                           <td style={{ padding:"13px 20px" }}><StatusBadge status={task.status}/></td>
                           <td style={{ padding:"13px 20px", fontSize:12, color:"#475569", minWidth:140 }}>{task.notes||<span style={{ color:"#2d3748" }}>—</span>}</td>
